@@ -1,8 +1,9 @@
 package main
 
 import (
-	"code.google.com/p/go.net/websocket"
 	"log"
+
+	"code.google.com/p/go.net/websocket"
 )
 
 // Handles all Websocket connections

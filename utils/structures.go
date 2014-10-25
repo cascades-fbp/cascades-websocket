@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+
 	"github.com/cascades-fbp/cascades/runtime"
 )
 

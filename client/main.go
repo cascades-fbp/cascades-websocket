@@ -1,15 +1,16 @@
 package main
 
 import (
-	"code.google.com/p/go.net/websocket"
 	"flag"
 	"fmt"
-	zmq "github.com/alecthomas/gozmq"
-	"github.com/cascades-fbp/cascades/components/utils"
-	"github.com/cascades-fbp/cascades/runtime"
 	"io/ioutil"
 	"log"
 	"os"
+
+	"code.google.com/p/go.net/websocket"
+	"github.com/cascades-fbp/cascades/components/utils"
+	"github.com/cascades-fbp/cascades/runtime"
+	zmq "github.com/pebbe/zmq4"
 )
 
 var (
@@ -21,7 +22,6 @@ var (
 	debug           = flag.Bool("debug", false, "Enable debug mode")
 
 	// Internal
-	context                      *zmq.Context
 	optionsPort, inPort, outPort *zmq.Socket
 	err                          error
 )
@@ -88,13 +88,10 @@ func validateArgs() {
 }
 
 func openPorts() {
-	context, err = zmq.NewContext()
+	optionsPort, err = utils.CreateInputPort(*optionsEndpoint)
 	utils.AssertError(err)
 
-	optionsPort, err = utils.CreateInputPort(context, *optionsEndpoint)
-	utils.AssertError(err)
-
-	inPort, err = utils.CreateInputPort(context, *inputEndpoint)
+	inPort, err = utils.CreateInputPort(*inputEndpoint)
 	utils.AssertError(err)
 }
 
@@ -104,7 +101,7 @@ func closePorts() {
 	if outPort != nil {
 		outPort.Close()
 	}
-	context.Close()
+	zmq.Term()
 }
 
 func main() {
@@ -133,7 +130,7 @@ func main() {
 	// Wait for the configuration on the options port
 	var connectString string
 	for {
-		ip, err := optionsPort.RecvMultipart(0)
+		ip, err := optionsPort.RecvMessageBytes(0)
 		if err != nil {
 			log.Println("Error receiving IP:", err.Error())
 			continue
@@ -158,18 +155,18 @@ func main() {
 	go connection.Reader()
 	go connection.Writer()
 	go func() {
-		outPort, err = utils.CreateOutputPort(context, *outputEndpoint)
+		outPort, err = utils.CreateOutputPort(*outputEndpoint)
 		utils.AssertError(err)
 		for data := range connection.Receive {
 			log.Println("Sending data from websocket to OUT port...")
-			outPort.SendMultipart(runtime.NewPacket(data), 0)
+			outPort.SendMessage(runtime.NewPacket(data))
 		}
 	}()
 	log.Println("Started")
 
 	// Listen to packets from IN port
 	for {
-		ip, err := inPort.RecvMultipart(0)
+		ip, err := inPort.RecvMessageBytes(0)
 		if err != nil {
 			log.Println("Error receiving message:", err.Error())
 			continue

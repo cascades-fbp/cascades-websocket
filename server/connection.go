@@ -1,11 +1,12 @@
 package main
 
 import (
+	"log"
+	"time"
+
 	"code.google.com/p/go.net/websocket"
 	"github.com/cascades-fbp/cascades-websocket/utils"
 	uuid "github.com/nu7hatch/gouuid"
-	"log"
-	"time"
 )
 
 // Connection data structure

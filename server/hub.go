@@ -1,9 +1,10 @@
 package main
 
 import (
+	"log"
+
 	"github.com/cascades-fbp/cascades-websocket/utils"
 	uuid "github.com/nu7hatch/gouuid"
-	"log"
 )
 
 // The communication hub between the active connections

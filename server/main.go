@@ -1,17 +1,18 @@
 package main
 
 import (
-	"code.google.com/p/go.net/websocket"
 	"flag"
 	"fmt"
-	zmq "github.com/alecthomas/gozmq"
-	wsutils "github.com/cascades-fbp/cascades-websocket/utils"
-	"github.com/cascades-fbp/cascades/components/utils"
-	"github.com/cascades-fbp/cascades/runtime"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+
+	"code.google.com/p/go.net/websocket"
+	wsutils "github.com/cascades-fbp/cascades-websocket/utils"
+	"github.com/cascades-fbp/cascades/components/utils"
+	"github.com/cascades-fbp/cascades/runtime"
+	zmq "github.com/pebbe/zmq4"
 )
 
 var (
@@ -23,7 +24,6 @@ var (
 	debug           = flag.Bool("debug", false, "Enable debug mode")
 
 	// Internal
-	context                      *zmq.Context
 	optionsPort, inPort, outPort *zmq.Socket
 	err                          error
 )
@@ -44,10 +44,7 @@ func validateArgs() {
 }
 
 func openPorts() {
-	context, err = zmq.NewContext()
-	utils.AssertError(err)
-
-	optionsPort, err = utils.CreateInputPort(context, *optionsEndpoint)
+	optionsPort, err = utils.CreateInputPort(*optionsEndpoint)
 	utils.AssertError(err)
 }
 
@@ -59,7 +56,7 @@ func closePorts() {
 	if outPort != nil {
 		outPort.Close()
 	}
-	context.Close()
+	zmq.Term()
 }
 
 func main() {
@@ -88,7 +85,7 @@ func main() {
 	// Wait for the configuration on the options port
 	var bindAddr string
 	for {
-		ip, err := optionsPort.RecvMultipart(0)
+		ip, err := optionsPort.RecvMessageBytes(0)
 		if err != nil {
 			log.Println("Error receiving IP:", err.Error())
 			continue
@@ -103,10 +100,10 @@ func main() {
 
 	// Receiver routine
 	go func() {
-		inPort, err = utils.CreateInputPort(context, *inputEndpoint)
+		inPort, err = utils.CreateInputPort(*inputEndpoint)
 		utils.AssertError(err)
 		for {
-			ip, err := inPort.RecvMultipart(0)
+			ip, err := inPort.RecvMessageBytes(0)
 			if err != nil {
 				log.Println("Error receiving message:", err.Error())
 				continue
@@ -126,7 +123,7 @@ func main() {
 
 	// Sender routine
 	go func() {
-		outPort, err = utils.CreateOutputPort(context, *outputEndpoint)
+		outPort, err = utils.CreateOutputPort(*outputEndpoint)
 		utils.AssertError(err)
 		for msg := range DefaultHub.Incoming {
 			log.Printf("Received data from connection: %#v\n", msg)
@@ -135,7 +132,7 @@ func main() {
 				log.Println("Failed to convert Message to IP:", err.Error())
 				continue
 			}
-			outPort.SendMultipart(ip, zmq.NOBLOCK)
+			outPort.SendMessageDontwait(ip)
 		}
 	}()
 
