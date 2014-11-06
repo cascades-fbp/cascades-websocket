@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"code.google.com/p/go.net/websocket"
+	"golang.org/x/net/websocket"
 	wsutils "github.com/cascades-fbp/cascades-websocket/utils"
 	"github.com/cascades-fbp/cascades/components/utils"
 	"github.com/cascades-fbp/cascades/runtime"

@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"code.google.com/p/go.net/websocket"
+	"golang.org/x/net/websocket"
 	"github.com/cascades-fbp/cascades-websocket/utils"
 	uuid "github.com/nu7hatch/gouuid"
 )

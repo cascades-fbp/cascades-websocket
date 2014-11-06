@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	"code.google.com/p/go.net/websocket"
+	"golang.org/x/net/websocket"
 	"github.com/cascades-fbp/cascades/components/utils"
 	"github.com/cascades-fbp/cascades/runtime"
 	zmq "github.com/pebbe/zmq4"
