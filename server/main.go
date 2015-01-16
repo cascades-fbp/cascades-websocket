@@ -7,12 +7,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"syscall"
+	"time"
 
-	"golang.org/x/net/websocket"
 	wsutils "github.com/cascades-fbp/cascades-websocket/utils"
 	"github.com/cascades-fbp/cascades/components/utils"
 	"github.com/cascades-fbp/cascades/runtime"
 	zmq "github.com/pebbe/zmq4"
+	"golang.org/x/net/websocket"
 )
 
 var (
@@ -25,6 +27,7 @@ var (
 
 	// Internal
 	optionsPort, inPort, outPort *zmq.Socket
+	inCh, outCh                  chan bool
 	err                          error
 )
 
@@ -44,7 +47,7 @@ func validateArgs() {
 }
 
 func openPorts() {
-	optionsPort, err = utils.CreateInputPort(*optionsEndpoint)
+	optionsPort, err = utils.CreateInputPort("websocket/server.options", *optionsEndpoint, nil)
 	utils.AssertError(err)
 }
 
@@ -77,30 +80,16 @@ func main() {
 
 	validateArgs()
 
+	ch := utils.HandleInterruption()
+	inCh = make(chan bool)
+	outCh = make(chan bool)
+
 	openPorts()
 	defer closePorts()
 
-	utils.HandleInterruption()
-
-	// Wait for the configuration on the options port
-	var bindAddr string
-	for {
-		ip, err := optionsPort.RecvMessageBytes(0)
-		if err != nil {
-			log.Println("Error receiving IP:", err.Error())
-			continue
-		}
-		if !runtime.IsValidIP(ip) || !runtime.IsPacket(ip) {
-			continue
-		}
-		bindAddr = string(ip[1])
-		break
-	}
-	optionsPort.Close()
-
 	// Receiver routine
 	go func() {
-		inPort, err = utils.CreateInputPort(*inputEndpoint)
+		inPort, err = utils.CreateInputPort("websocket/server.in", *inputEndpoint, inCh)
 		utils.AssertError(err)
 		for {
 			ip, err := inPort.RecvMessageBytes(0)
@@ -123,7 +112,7 @@ func main() {
 
 	// Sender routine
 	go func() {
-		outPort, err = utils.CreateOutputPort(*outputEndpoint)
+		outPort, err = utils.CreateOutputPort("websocket/server.out", *outputEndpoint, outCh)
 		utils.AssertError(err)
 		for msg := range DefaultHub.Incoming {
 			log.Printf("Received data from connection: %#v\n", msg)
@@ -135,6 +124,58 @@ func main() {
 			outPort.SendMessageDontwait(ip)
 		}
 	}()
+
+	waitCh := make(chan bool)
+	go func() {
+		total := 0
+		for {
+			select {
+			case v := <-inCh:
+				if !v {
+					log.Println("IN port is closed. Interrupting execution")
+					ch <- syscall.SIGTERM
+				} else {
+					total++
+				}
+			case v := <-outCh:
+				if !v {
+					log.Println("OUT port is closed. Interrupting execution")
+					ch <- syscall.SIGTERM
+				} else {
+					total++
+				}
+			}
+			if total >= 2 && waitCh != nil {
+				waitCh <- true
+			}
+		}
+	}()
+
+	log.Println("Waiting for port connections to establish... ")
+	select {
+	case <-waitCh:
+		log.Println("Ports connected")
+		waitCh = nil
+	case <-time.Tick(30 * time.Second):
+		log.Println("Timeout: port connections were not established within provided interval")
+		os.Exit(1)
+	}
+
+	log.Println("Waiting for configuration...")
+	var bindAddr string
+	for {
+		ip, err := optionsPort.RecvMessageBytes(0)
+		if err != nil {
+			log.Println("Error receiving IP:", err.Error())
+			continue
+		}
+		if !runtime.IsValidIP(ip) || !runtime.IsPacket(ip) {
+			continue
+		}
+		bindAddr = string(ip[1])
+		break
+	}
+	optionsPort.Close()
 
 	// Configure & start websocket server
 	http.Handle("/", websocket.Handler(WebHandler))

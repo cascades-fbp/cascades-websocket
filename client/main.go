@@ -6,11 +6,13 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"syscall"
+	"time"
 
-	"golang.org/x/net/websocket"
 	"github.com/cascades-fbp/cascades/components/utils"
 	"github.com/cascades-fbp/cascades/runtime"
 	zmq "github.com/pebbe/zmq4"
+	"golang.org/x/net/websocket"
 )
 
 var (
@@ -23,15 +25,18 @@ var (
 
 	// Internal
 	optionsPort, inPort, outPort *zmq.Socket
+	inCh, outCh                  chan bool
 	err                          error
 )
 
+// Connection container
 type Connection struct {
 	WS      *websocket.Conn
 	Send    chan []byte
 	Receive chan []byte
 }
 
+// NewConnection constructs Connection structures
 func NewConnection(wsConn *websocket.Conn) *Connection {
 	connection := &Connection{
 		WS:      wsConn,
@@ -41,35 +46,38 @@ func NewConnection(wsConn *websocket.Conn) *Connection {
 	return connection
 }
 
-func (self *Connection) Reader() {
+// Reader is reading from socket and writes to Receive channel
+func (c *Connection) Reader() {
 	for {
 		var data []byte
-		err := websocket.Message.Receive(self.WS, &data)
+		err := websocket.Message.Receive(c.WS, &data)
 		if err != nil {
 			log.Println("Reader: error receiving message")
 			continue
 		}
 		log.Println("Reader: received from websocket", data)
-		self.Receive <- data
+		c.Receive <- data
 	}
-	self.WS.Close()
+	c.WS.Close()
 }
 
-func (self *Connection) Writer() {
-	for data := range self.Send {
+// Writer is reading from channel and writes to socket
+func (c *Connection) Writer() {
+	for data := range c.Send {
 		log.Println("Writer: will send to websocket", data)
-		err := websocket.Message.Send(self.WS, data)
+		err := websocket.Message.Send(c.WS, data)
 		if err != nil {
 			break
 		}
 	}
-	self.WS.Close()
+	c.WS.Close()
 }
 
-func (self *Connection) Close() {
-	close(self.Send)
-	close(self.Receive)
-	self.WS.Close()
+// Close closes the channels and socket
+func (c *Connection) Close() {
+	close(c.Send)
+	close(c.Receive)
+	c.WS.Close()
 }
 
 func validateArgs() {
@@ -88,10 +96,10 @@ func validateArgs() {
 }
 
 func openPorts() {
-	optionsPort, err = utils.CreateInputPort(*optionsEndpoint)
+	optionsPort, err = utils.CreateInputPort("websocket/client.options", *optionsEndpoint, nil)
 	utils.AssertError(err)
 
-	inPort, err = utils.CreateInputPort(*inputEndpoint)
+	inPort, err = utils.CreateInputPort("websocket/client.in", *inputEndpoint, inCh)
 	utils.AssertError(err)
 }
 
@@ -122,12 +130,14 @@ func main() {
 
 	validateArgs()
 
+	ch := utils.HandleInterruption()
+	inCh = make(chan bool)
+	outCh = make(chan bool)
+
 	openPorts()
 	defer closePorts()
 
-	utils.HandleInterruption()
-
-	// Wait for the configuration on the options port
+	log.Println("Waiting for configuration...")
 	var connectString string
 	for {
 		ip, err := optionsPort.RecvMessageBytes(0)
@@ -148,20 +158,58 @@ func main() {
 	origin := fmt.Sprintf("http://%s", hostname)
 	ws, err := websocket.Dial(connectString, "", origin)
 	utils.AssertError(err)
-
 	connection := NewConnection(ws)
 	defer connection.Close()
 
-	go connection.Reader()
-	go connection.Writer()
+	// Sender goroutine
 	go func() {
-		outPort, err = utils.CreateOutputPort(*outputEndpoint)
+		outPort, err = utils.CreateOutputPort("websocket/client.out", *outputEndpoint, outCh)
 		utils.AssertError(err)
 		for data := range connection.Receive {
 			log.Println("Sending data from websocket to OUT port...")
 			outPort.SendMessage(runtime.NewPacket(data))
 		}
 	}()
+
+	waitCh := make(chan bool)
+	go func() {
+		total := 0
+		for {
+			select {
+			case v := <-inCh:
+				if !v {
+					log.Println("IN port is closed. Interrupting execution")
+					ch <- syscall.SIGTERM
+				} else {
+					total++
+				}
+			case v := <-outCh:
+				if !v {
+					log.Println("OUT port is closed. Interrupting execution")
+					ch <- syscall.SIGTERM
+				} else {
+					total++
+				}
+			}
+			if total >= 2 && waitCh != nil {
+				waitCh <- true
+			}
+		}
+	}()
+
+	log.Println("Waiting for port connections to establish... ")
+	select {
+	case <-waitCh:
+		log.Println("Ports connected")
+		waitCh = nil
+	case <-time.Tick(30 * time.Second):
+		log.Println("Timeout: port connections were not established within provided interval")
+		os.Exit(1)
+	}
+
+	go connection.Reader()
+	go connection.Writer()
+
 	log.Println("Started")
 
 	// Listen to packets from IN port
