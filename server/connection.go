@@ -4,9 +4,9 @@ import (
 	"log"
 	"time"
 
-	"golang.org/x/net/websocket"
 	"github.com/cascades-fbp/cascades-websocket/utils"
 	uuid "github.com/nu7hatch/gouuid"
+	"golang.org/x/net/websocket"
 )
 
 // Connection data structure
@@ -47,6 +47,7 @@ func (c *Connection) Reader() {
 		err := websocket.JSON.Receive(c.WS, &payload)
 		if err != nil {
 			log.Printf("Connection.Reader(%v): Unhandled error: %#v", c.ID, err.Error())
+			break
 		}
 
 		// Pass data to the hub (in the proper channel)
@@ -63,6 +64,7 @@ func (c *Connection) Writer() {
 		err := websocket.JSON.Send(c.WS, payload)
 		if err != nil {
 			log.Printf("Connection.Writer(%v): Unhandled error: %#v", c.ID, err.Error())
+			break
 		}
 	}
 	c.WS.Close()

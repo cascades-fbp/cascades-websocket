@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"syscall"
 	"time"
 
@@ -28,39 +29,9 @@ var (
 	// Internal
 	optionsPort, inPort, outPort *zmq.Socket
 	inCh, outCh                  chan bool
+	exitCh                       chan os.Signal
 	err                          error
 )
-
-func validateArgs() {
-	if *optionsEndpoint == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-	if *inputEndpoint == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-	if *outputEndpoint == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-}
-
-func openPorts() {
-	optionsPort, err = utils.CreateInputPort("websocket/server.options", *optionsEndpoint, nil)
-	utils.AssertError(err)
-}
-
-func closePorts() {
-	optionsPort.Close()
-	if inPort != nil {
-		inPort.Close()
-	}
-	if outPort != nil {
-		outPort.Close()
-	}
-	zmq.Term()
-}
 
 func main() {
 	flag.Parse()
@@ -80,10 +51,23 @@ func main() {
 
 	validateArgs()
 
-	ch := utils.HandleInterruption()
+	// Communication channels
 	inCh = make(chan bool)
 	outCh = make(chan bool)
+	exitCh = make(chan os.Signal, 1)
 
+	// Start the communication & processing logic
+	go mainLoop()
+
+	// Wait for the end...
+	signal.Notify(exitCh, os.Interrupt, syscall.SIGTERM)
+	<-exitCh
+
+	log.Println("Done")
+}
+
+// mainLoop initiates all ports and handles the traffic
+func mainLoop() {
 	openPorts()
 	defer closePorts()
 
@@ -91,10 +75,10 @@ func main() {
 	go func() {
 		inPort, err = utils.CreateInputPort("websocket/server.in", *inputEndpoint, inCh)
 		utils.AssertError(err)
+		defer inPort.Close()
 		for {
 			ip, err := inPort.RecvMessageBytes(0)
 			if err != nil {
-				log.Println("Error receiving message:", err.Error())
 				continue
 			}
 			if !runtime.IsValidIP(ip) {
@@ -114,6 +98,7 @@ func main() {
 	go func() {
 		outPort, err = utils.CreateOutputPort("websocket/server.out", *outputEndpoint, outCh)
 		utils.AssertError(err)
+		defer outPort.Close()
 		for msg := range DefaultHub.Incoming {
 			log.Printf("Received data from connection: %#v\n", msg)
 			ip, err := wsutils.Message2IP(&msg)
@@ -133,14 +118,16 @@ func main() {
 			case v := <-inCh:
 				if !v {
 					log.Println("IN port is closed. Interrupting execution")
-					ch <- syscall.SIGTERM
+					exitCh <- syscall.SIGTERM
+					break
 				} else {
 					total++
 				}
 			case v := <-outCh:
 				if !v {
 					log.Println("OUT port is closed. Interrupting execution")
-					ch <- syscall.SIGTERM
+					exitCh <- syscall.SIGTERM
+					break
 				} else {
 					total++
 				}
@@ -158,7 +145,8 @@ func main() {
 		waitCh = nil
 	case <-time.Tick(30 * time.Second):
 		log.Println("Timeout: port connections were not established within provided interval")
-		os.Exit(1)
+		exitCh <- syscall.SIGTERM
+		return
 	}
 
 	log.Println("Waiting for configuration...")
@@ -166,7 +154,6 @@ func main() {
 	for {
 		ip, err := optionsPort.RecvMessageBytes(0)
 		if err != nil {
-			log.Println("Error receiving IP:", err.Error())
 			continue
 		}
 		if !runtime.IsValidIP(ip) || !runtime.IsPacket(ip) {
@@ -187,4 +174,39 @@ func main() {
 	if err := http.ListenAndServe(bindAddr, nil); err != nil {
 		log.Fatal("ListenAndServe Error:", err)
 	}
+}
+
+// validateArgs checks all required flags
+func validateArgs() {
+	if *optionsEndpoint == "" {
+		flag.Usage()
+		os.Exit(1)
+	}
+	if *inputEndpoint == "" {
+		flag.Usage()
+		os.Exit(1)
+	}
+	if *outputEndpoint == "" {
+		flag.Usage()
+		os.Exit(1)
+	}
+}
+
+// openPorts create ZMQ sockets and start socket monitoring loops
+func openPorts() {
+	optionsPort, err = utils.CreateInputPort("websocket/server.options", *optionsEndpoint, nil)
+	utils.AssertError(err)
+}
+
+// closePorts closes all active ports and terminates ZMQ context
+func closePorts() {
+	log.Println("Closing ports...")
+	optionsPort.Close()
+	if inPort != nil {
+		inPort.Close()
+	}
+	if outPort != nil {
+		outPort.Close()
+	}
+	zmq.Term()
 }
